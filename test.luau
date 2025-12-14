@@ -1,6 +1,4 @@
-local u = 0
-u += 5
-local function x()
-	return u
-end
-print(x())
+local function someshit() end
+print("alala some code some more code")
+__debugbreak()
+print("Yo")

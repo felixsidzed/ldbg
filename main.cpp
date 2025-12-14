@@ -12,6 +12,7 @@
 #include <ldebug.h>
 #include <lualib.h>
 #include <Luau/Bytecode.h>
+#include <Luau/BytecodeUtils.h>
 
 #include "disasm.h"
 
@@ -200,6 +201,9 @@ namespace ldbg {
 			puts("pc out of range");
 			return;
 		}
+
+		if (Luau::getOpLength((LuauOpcode)LUAU_INSN_OP(p->code[pc - 1])) - 1)
+			pc--;
 
 		ensureDebugInsn(L, p);
 		p->code[pc] = LOP_BREAK;
@@ -589,6 +593,7 @@ namespace ldbg {
 					} else {
 						DllMain = ncl;
 						lua_pop(L, 1);
+						lua_ref(L, -1);
 					}
 				}
 
@@ -797,16 +802,91 @@ namespace ldbg {
 		);
 
 		const Instruction* pc = L->ci->savedpc - 1;
-		ldbg::idisasm(stdout, pc, cl->l.p);
-		putchar('\n');
 
-		repl(L);
+		if (!ar->userdata) {
+			ldbg::idisasm(stdout, pc, cl->l.p);
+			putchar('\n');
+
+			repl(L);
+		}
+		debugstepActive = true;
 	}
 }
 
+int __bp(lua_State* L) {
+	Closure* cl = clvalue((L->ci - 1)->func);
+	if (cl->isC)
+		return 0;
+	L->ci--;
+
+	ptrdiff_t base = savestack(L, L->base);
+	ptrdiff_t top = savestack(L, L->top);
+	ptrdiff_t ci_top = savestack(L, L->ci->top);
+	int status = L->status;
+
+	if (status == LUA_YIELD || status == LUA_BREAK) {
+		L->status = 0;
+		L->base = L->ci->base;
+	}
+
+	const Instruction* oldsavedpc = L->ci->savedpc;
+
+	if (L->ci->savedpc && L->ci->savedpc != cl->l.p->code + cl->l.p->sizecode)
+		L->ci->savedpc++;
+
+	luaD_checkstack(L, LUA_MINSTACK);
+	L->ci->top = L->top + LUA_MINSTACK;
+	LUAU_ASSERT(L->ci->top <= L->stack_last);
+
+	lua_Debug ar;
+	ar.userdata = (void*)0x67;
+	ar.currentline = luaG_getline(cl->l.p, pcRel(L->ci->savedpc, cl->l.p));
+
+	ldbg::debugbreak(L, &ar);
+
+	L->ci->savedpc = oldsavedpc;
+
+	L->ci->top = restorestack(L, ci_top);
+	L->top = restorestack(L, top);
+
+	if (status == LUA_YIELD && L->status != LUA_YIELD) {
+		L->status = LUA_YIELD;
+		L->base = restorestack(L, base);
+	} else if (status == LUA_BREAK) {
+		LUAU_ASSERT(L->status != LUA_BREAK);
+
+		L->status = LUA_BREAK;
+		L->base = restorestack(L, base);
+	}
+
+	L->ci++;
+	return 0;
+}
+
 int main(int argc, char** argv) {
-	if (argc < 2) {
-		printf("usage: ldbg <filename>\n");
+	std::string filename;
+	bool enableDebugBreak = true;
+
+	int i = 1;
+	while (i < argc) {
+		std::string arg = argv[i];
+		if (arg == "-fno-debugbreak") {
+			enableDebugBreak = false;
+			++i;
+		} else {
+			filename = argv[i];
+			++i;
+
+			while (i < argc) {
+				filename += " ";
+				filename += argv[i];
+				++i;
+			} break;
+		}
+	}
+
+	if (filename.empty()) {
+		printf("usage: ldbg [-fno-debugbreak] <filename>\n");
 		return 1;
 	}
 
@@ -815,11 +895,16 @@ int main(int argc, char** argv) {
 		luaL_openlibs(L);
 		luaL_sandboxthread(L);
 
+		if (enableDebugBreak) {
+			lua_pushcfunction(L, __bp, "__debugbreak");
+			lua_setglobal(L, "__debugbreak");
+		}
+
 		L->global->cb.debugstep = ldbg::debugstep;
 		L->global->cb.debugbreak = ldbg::debugbreak;
 		L->singlestep = true;
 
-		std::ifstream file(argv[1], std::ios::binary | std::ios::ate);
+		std::ifstream file(filename, std::ios::binary | std::ios::ate);
 		if (!file.is_open()) {
 			puts("unable to open file");
 			return 1;
@@ -842,7 +927,7 @@ int main(int argc, char** argv) {
 				1, // verbose coverage is stupid
 			}, {}, nullptr);
 
-		if (!luau_load(L, std::format("@{}", argv[1]).c_str(), src.data(), src.size(), 0)) {
+		if (!luau_load(L, std::format("@{}", filename).c_str(), src.data(), src.size(), 0)) {
 			const Closure* cl = clvalue(L->top - 1);
 			ldbg::collectProtos(cl->l.p);
 			lua_call(L, 0, 0);
