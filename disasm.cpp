@@ -11,6 +11,8 @@
 #include <Luau/Bytecode.h>
 #include <Luau/BytecodeUtils.h>
 
+#include "style.h"
+
 namespace ldbg {
 	static const char* luau_opcode[LOP__COUNT] = {
 		"NOP", "BREAK",
@@ -75,10 +77,10 @@ namespace ldbg {
 #endif
 
 		if (op >= LOP__COUNT) {
-			fprintf(f, "INVALID %u", op);
+			fprintf(f, ANSI_GREY "INVALID %u" ANSI_RESET, op);
 			return;
 		}
-		fputs(luau_opcode[op], f); fputc(' ', f);
+		fprintf(f, ANSI_RED "%s ", luau_opcode[op]);
 
 		uint32_t line = (uint32_t)(pc - p->code);
 		switch (op) {
@@ -98,20 +100,20 @@ namespace ldbg {
 		case LOP_PREPVARARGS:
 		case LOP_FORGPREP_INEXT:
 		case LOP_CLOSEUPVALS:
-			fprintf(f, "R%u", LUAU_INSN_A(insn));
+			fprintf(f, ANSI_CYAN "R%u", LUAU_INSN_A(insn));
 			break;
 		case LOP_LOADB:
-			fprintf(f, "R%u %s", LUAU_INSN_A(insn), LUAU_INSN_B(insn) ? "true" : "false");
+			fprintf(f, ANSI_CYAN "R%u %s", LUAU_INSN_A(insn), LUAU_INSN_B(insn) ? "true" : "false");
 			pc += LUAU_INSN_C(insn);
 			break;
 		case LOP_LOADN:
-			fprintf(f, "R%u %hd", LUAU_INSN_A(insn), LUAU_INSN_D(insn));
+			fprintf(f, ANSI_CYAN "R%u " ANSI_YELLOW "%hd", LUAU_INSN_A(insn), LUAU_INSN_D(insn));
 			break;
 		case LOP_MOVE:
 		case LOP_NOT:
 		case LOP_MINUS:
 		case LOP_LENGTH:
-			fprintf(f, "R%u R%u", LUAU_INSN_A(insn), LUAU_INSN_D(insn));
+			fprintf(f, ANSI_CYAN "R%u R%u", LUAU_INSN_A(insn), LUAU_INSN_D(insn));
 			break;
 		case LOP_LOADK:
 		case LOP_DUPTABLE:
@@ -119,20 +121,20 @@ namespace ldbg {
 		case LOP_DUPCLOSURE:
 		case LOP_LOADKX: {
 			uint32_t D = LUAU_INSN_D(insn);
-			fprintf(f, "R%u K%u ; %s", LUAU_INSN_A(insn), D, lua_strprimitive(&p->k[D]).c_str());
+			fprintf(f, ANSI_CYAN "R%u K%u " ANSI_GREY "; %s", LUAU_INSN_A(insn), D, lua_strprimitive(&p->k[D]).c_str());
 		} break;
 		case LOP_SETGLOBAL:
 		case LOP_GETGLOBAL:
-			fprintf(f, "R%u K%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
+			fprintf(f, ANSI_CYAN "R%u K%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
 			break;
 		case LOP_SETUPVAL:
 		case LOP_GETUPVAL:
-			fprintf(f, "R%u U%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
+			fprintf(f, ANSI_CYAN "R%u U%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
 			if (p->upvalues)
-				fprintf(f, " ; %s", getstr(p->upvalues[LUAU_INSN_B(insn)]));
+				fprintf(f, ANSI_GREY " ; %s", getstr(p->upvalues[LUAU_INSN_B(insn)]));
 			break;
 		case LOP_GETIMPORT: {
-			fprintf(f, "R%u K%u ; ", LUAU_INSN_A(insn), LUAU_INSN_D(insn));
+			fprintf(f, ANSI_CYAN "R%u K%u " ANSI_GREY "; " "", LUAU_INSN_A(insn), LUAU_INSN_D(insn));
 			
 			uint32_t aux = *++pc;
 			int count = (uint8_t)(aux >> 30);
@@ -176,34 +178,34 @@ namespace ldbg {
 		case LOP_ORK:
 		case LOP_SUBRK:
 		case LOP_DIVRK:
-			fprintf(f, "R%u R%u R%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
+			fprintf(f, ANSI_CYAN "R%u R%u R%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
 			break;
 		case LOP_GETTABLEKS:
 		case LOP_SETTABLEKS:
 		case LOP_NAMECALL: {
 			uint32_t aux = *++pc;
-			fprintf(f, "R%u R%u K%u ; %s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, lua_strprimitive(&p->k[aux]).c_str());
+			fprintf(f, ANSI_CYAN "R%u R%u K%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, lua_strprimitive(&p->k[aux]).c_str());
 		} break;
 		case LOP_GETTABLEN:
 		case LOP_SETTABLEN:
-			fprintf(f, "R%u R%u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) + 1);
+			fprintf(f, ANSI_CYAN "R%u R%u " ANSI_YELLOW "%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) + 1);
 			break;
 		case LOP_CALL:
-			fprintf(f, "R%u %d %d", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1, LUAU_INSN_C(insn) - 1);
+			fprintf(f, ANSI_CYAN "R%u " ANSI_YELLOW "%d %d", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1, LUAU_INSN_C(insn) - 1);
 			break;
 		case LOP_RETURN:
 		case LOP_GETVARARGS:
-			fprintf(f, "R%u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1);
+			fprintf(f, ANSI_CYAN "R%u " ANSI_YELLOW "%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1);
 			break;
 		case LOP_FORGLOOP:
 		case LOP_FORNPREP:
 		case LOP_JUMPIF:
 		case LOP_JUMPIFNOT:
-			fprintf(f, "R%u ", LUAU_INSN_A(insn));
+			fprintf(f, ANSI_CYAN "R%u ", LUAU_INSN_A(insn));
 			[[fallthrough]];
 		case LOP_JUMPBACK:
 		case LOP_JUMP:
-			fprintf(f, "L%u", line + LUAU_INSN_D(insn));
+			fprintf(f, ANSI_CYAN "L%u", line + LUAU_INSN_D(insn));
 			break;
 		case LOP_JUMPIFEQ:
 		case LOP_JUMPIFLE:
@@ -211,67 +213,69 @@ namespace ldbg {
 		case LOP_JUMPIFNOTEQ:
 		case LOP_JUMPIFNOTLE:
 		case LOP_JUMPIFNOTLT:
-			fprintf(f, "R%u R%u L%u", LUAU_INSN_A(insn), *++pc, line + LUAU_INSN_D(insn) - 1);
+			fprintf(f, ANSI_CYAN "R%u R%u L%u", LUAU_INSN_A(insn), *++pc, line + LUAU_INSN_D(insn) - 1);
 			break;
 		case LOP_NEWTABLE:
-			fprintf(f, "R%u %u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc);
+			fprintf(f, ANSI_CYAN "R%u " ANSI_YELLOW "%u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc);
 			break;
 		case LOP_SETLIST:
-			fprintf(f, "R%u R%u %u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) - 1, *++pc);
+			fprintf(f, ANSI_CYAN "R%u R%u " ANSI_YELLOW "%u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) - 1, *++pc);
 			break;
 		case LOP_FORNLOOP:
-			fprintf(f, "R%u L%u", LUAU_INSN_A(insn), line + LUAU_INSN_D(insn) + 2);
+			fprintf(f, ANSI_CYAN "R%u L%u", LUAU_INSN_A(insn), line + LUAU_INSN_D(insn) + 2);
 			break;
 		case LOP_FASTCALL:
-			fprintf(f, "%u L%u", LUAU_INSN_A(insn), line + LUAU_INSN_C(insn) + 1);
+			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "L%u", LUAU_INSN_A(insn), line + LUAU_INSN_C(insn) + 1);
 			break;
 		case LOP_FASTCALL1:
-			fprintf(f, "%u R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), line + LUAU_INSN_C(insn) + 1);
+			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), line + LUAU_INSN_C(insn) + 1);
 			break;
 		case LOP_FASTCALL2:
-			fprintf(f, "%u R%u R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc & 0xFF, line + LUAU_INSN_C(insn));
+			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc & 0xFF, line + LUAU_INSN_C(insn));
 			break;
 		case LOP_FASTCALL2K: {
 			uint32_t aux = *++pc;
-			fprintf(f, "%u R%u K%u L%u ; %s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, line + LUAU_INSN_C(insn), lua_strprimitive(&p->k[aux]).c_str());
+			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u K%u L%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, line + (((insn) >> 24) & 0xff), lua_strprimitive(&p->k[aux]).c_str());
 		} break;
 		case LOP_FASTCALL3:
-			fprintf(f, "%u R%u R%u R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc & 0xFF, (*pc >> 8) & 0xFF, line + LUAU_INSN_C(insn));
+			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u R%u R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc & 0xFF, (*pc >> 8) & 0xFF, line + LUAU_INSN_C(insn));
 			break;
 		case LOP_JUMPX:
-			fprintf(f, "L%u", line + LUAU_INSN_E(insn));
+			fprintf(f, ANSI_CYAN "L%u", line + LUAU_INSN_E(insn));
 			break;
 		case LOP_COVERAGE:
-			fprintf(f, "%u", LUAU_INSN_E(insn));
+			fprintf(f, ANSI_YELLOW "%u", LUAU_INSN_E(insn));
 			break;
 		case LOP_CAPTURE:
 			switch (LUAU_INSN_A(insn)) {
 			case LCT_VAL:
-				fprintf(f, "VAL R%u", LUAU_INSN_B(insn));
+				fprintf(f, "VAL " ANSI_CYAN "R%u", LUAU_INSN_B(insn));
 				break;
 			case LCT_REF:
-				fprintf(f, "REF R%u", LUAU_INSN_B(insn));
+				fprintf(f, "REF " ANSI_CYAN "R%u", LUAU_INSN_B(insn));
 				break;
 			case LCT_UPVAL:
-				fprintf(f, "UPVAL U%u", LUAU_INSN_B(insn));
+				fprintf(f, "UPVAL " ANSI_CYAN "U%u", LUAU_INSN_B(insn));
 				if (p->upvalues)
-					fprintf(f, " ; %s", getstr(p->upvalues[LUAU_INSN_B(insn)]));
+					fprintf(f, " " ANSI_GREY "; " "%s", getstr(p->upvalues[LUAU_INSN_B(insn)]));
 				break;
 			}
 			break;
 		case LOP_JUMPXEQKNIL:
 		case LOP_JUMPXEQKB:
 			// TODO: add note
-			fprintf(f, "R%u L%u %u", LUAU_INSN_A(insn), line + LUAU_INSN_D(insn) - 1, *++pc);
+			fprintf(f, ANSI_CYAN "R%u L%u " ANSI_YELLOW "%u", LUAU_INSN_A(insn), line + LUAU_INSN_D(insn) - 1, *++pc);
 			break;
 		case LOP_JUMPXEQKN:
 		case LOP_JUMPXEQKS: {
 			uint32_t aux = *++pc & 0xFFFFFF;
-			fprintf(f, "R%u K%u L%u ; %s", LUAU_INSN_A(insn), aux, line + LUAU_INSN_D(insn) - 1, lua_strprimitive(&p->k[aux]).c_str());
+			fprintf(f, ANSI_CYAN "R%u K%u L%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), aux, line + LUAU_INSN_D(insn) - 1, lua_strprimitive(&p->k[aux]).c_str());
 		} break;
 		default:
 			break;
 		}
+
+		fputs(ANSI_RESET, f);
 	}
 
 	void fdisasm(FILE* f, const Proto* p) {

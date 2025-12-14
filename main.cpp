@@ -14,6 +14,7 @@
 #include <Luau/Bytecode.h>
 #include <Luau/BytecodeUtils.h>
 
+#include "style.h"
 #include "disasm.h"
 
 #define DLL_PROCESS_ATTACH	1
@@ -22,7 +23,6 @@
 #define DLL_PROCESS_DETACH	0
 
 namespace nula {
-	constexpr uint8_t utag = 45; // n + u + l + a
 	constexpr uint32_t signature = 0x616c756e;
 }
 
@@ -48,6 +48,8 @@ namespace ldbg {
 	uint32_t stateLevel = 0;
 	State state = State::None;
 	bool debugstepActive = true;
+
+	size_t oldGCThreshold = 0;
 
 	extern std::string lua_strprimitive(const TValue* o);
 
@@ -100,15 +102,22 @@ namespace ldbg {
 	}
 
 	static int _handler(lua_State* L) {
-		printf("%s\nStack Begin\n", luaL_checkstring(L, 1));
+		printf(ANSI_RED "%s" ANSI_GREY "\nStack Begin\n", luaL_checkstring(L, 1));
 		lua_getglobal(L, "debug");
 		lua_getfield(L, -1, "traceback");
 		lua_call(L, 0, 1);
 		if (const char* traceback = lua_tostring(L, -1))
 			printf("%s", traceback);
-		printf("Stack End\n");
+		printf("Stack End\n" ANSI_RESET);
 		lua_pop(L, 2);
 		return 0;
+	}
+
+	template<typename T>
+	static bool parseInt(const std::string& s, T& idx) {
+		const char* end = s.data() + s.size();
+		auto result = std::from_chars(s.data(), end, idx);
+		return result.ec == std::errc() && result.ptr == end;
 	}
 
 	void collectProtos(Proto* p) {
@@ -126,7 +135,7 @@ namespace ldbg {
 		lua_Debug ar;
 		if (lua_getinfo(L, 0, "sln", &ar)) {
 			const Closure* cl = clvalue(L->ci->func);
-			printf("=> %s() at %s:%d\n", cl->l.p->debugname ? getstr(cl->l.p->debugname) : "??", ar.short_src, ar.currentline);
+			printf(ANSI_GREY "=> " ANSI_CYAN "%s" ANSI_RESET "() at %s:" ANSI_YELLOW "%d\n" ANSI_RESET, cl->l.p->debugname ? getstr(cl->l.p->debugname) : "??", ar.short_src, ar.currentline);
 		}
 	}
 
@@ -161,7 +170,7 @@ namespace ldbg {
 		}
 
 		if (count > 0)
-			printf("breakpoint %zu %s at %s:%d\n", breakpoints.size(), enable ? "set" : "cleared", source.c_str(), line);
+			printf("breakpoint %zu %s at %s:" ANSI_YELLOW "%d\n" ANSI_RESET, breakpoints.size(), enable ? "set" : "cleared", source.c_str(), line);
 		else
 			printf("no functions found matching source '%s' or line number out of range\n", source.c_str());
 	}
@@ -175,7 +184,7 @@ namespace ldbg {
 			break;
 		}
 
-		printf("breakpoint %zu %s at %s:%d\n", breakpoints.size(), enable ? "set" : "cleared", getstr(p->source), p->linedefined);
+		printf("breakpoint %zu %s at %s:" ANSI_YELLOW "%d\n" ANSI_RESET, breakpoints.size(), enable ? "set" : "cleared", getstr(p->source), p->linedefined);
 	}
 
 	void toggleBreakpoint(lua_State* L, size_t num) {
@@ -209,7 +218,7 @@ namespace ldbg {
 		p->code[pc] = LOP_BREAK;
 
 		uint32_t ln = luaG_getline(p, pc);
-		printf("breakpoint %zu set at %s:%d\n", addBreakpoint(p, getSource(p), pc, ln), getSource(p).c_str(), ln);
+		printf("breakpoint %zu set at %s:" ANSI_YELLOW "%d\n" ANSI_RESET, addBreakpoint(p, getSource(p), pc, ln), getSource(p).c_str(), ln);
 	}
 
 	static void handleBreakByFunc(lua_State* L, const std::string& source, const std::string& func) {
@@ -229,12 +238,24 @@ namespace ldbg {
 			puts("function not found");
 	}
 	
+	lua_Alloc oldFrealloc = nullptr;
+	void* frealloc(void* ud, void* ptr, size_t osize, size_t nsize) {
+		if (!ptr)
+			printf("[gc trace] allocation with size " ANSI_YELLOW "%zu\n" ANSI_RESET, nsize);
+		else if (!nsize)
+			printf("[gc trace] deallocation of ptr " ANSI_YELLOW "0x%llx\n" ANSI_RESET, (uintptr_t)ptr);
+		else
+			printf("[gc trace] reallocation of ptr " ANSI_YELLOW "0x%llx" ANSI_RESET ": " ANSI_YELLOW "%zu" ANSI_RESET " -> " ANSI_YELLOW "%zu\n" ANSI_RESET, (uintptr_t)ptr, osize, nsize);
+
+		return oldFrealloc(ud, ptr, osize, nsize);
+	}
+
 	void repl(lua_State* L) {
 		debugstepActive = true;
 
 		std::string line;
 		while (true) {
-			fputs("(ldbg) ", stdout);
+			fputs(ANSI_RESET "(ldbg) ", stdout);
 			if (!std::getline(std::cin, line))
 				break;
 
@@ -254,10 +275,10 @@ namespace ldbg {
 			else if (cmd == "bt" || cmd == "backtrace") {
 				lua_Debug ar;
 				int level = 0;
-				fputs("(current) ", stdout);
+				fputs(ANSI_GREY "(current) " ANSI_RESET, stdout);
 				while (lua_getinfo(L, level++, "sl", &ar))
-					printf("%d - %s:%d\n", level, ar.short_src, ar.currentline);
-
+					printf(ANSI_YELLOW "%d" ANSI_RESET " - %s:" ANSI_YELLOW "%d\n", level, ar.short_src, ar.currentline);
+				fputs(ANSI_RESET, stdout);
 			}
 			else if (cmd == "quit" || cmd == "q") {
 				L->status = LUA_ERRRUN;
@@ -340,7 +361,7 @@ namespace ldbg {
 				if (ss >> num) {
 					if (num < 1 || num > breakpoints.size()) {
 						puts("invalid breakpoint number");
-						return;
+						continue;
 					}
 
 					const auto& bp = breakpoints[num - 1];
@@ -349,7 +370,7 @@ namespace ldbg {
 						bp.p->code[bp.pc] |= LUAU_INSN_OP(bp.p->debuginsn[bp.pc]);
 					}
 
-					printf("deleted breakpoint %zu at %s:%d\n", num, bp.source.c_str(), bp.line);
+					printf("deleted breakpoint %zu at %s:" ANSI_YELLOW "%d\n" ANSI_RESET, num, bp.source.c_str(), bp.line);
 					breakpoints.erase(breakpoints.begin() + (num - 1));
 				} else
 					puts("usage: delete <breakpoint number>");
@@ -357,10 +378,8 @@ namespace ldbg {
 			}
 			else if (cmd == "toggle") {
 				size_t num;
-				if (ss >> num)
-					toggleBreakpoint(L, num);
-				else
-					puts("usage: toggle <breakpoint number>");
+				if (ss >> num) toggleBreakpoint(L, num);
+				else puts("usage: toggle <breakpoint number>");
 
 			}
 			else if (cmd == "inspect" || cmd == "i") {
@@ -379,28 +398,28 @@ namespace ldbg {
 				if (subcmd == "locals") {
 					if (!p->sizelocvars) {
 						puts("missing local info");
-						return;
+						continue;
 					}
 
 					for (int i = 0; i < p->sizelocvars; i++) {
 						const LocVar* local = &p->locvars[i];
 
 						const int pc = (int)((L->ci->savedpc - 1) - p->code);
-						printf("  R%u = %s", local->reg, getstr(local->varname));
+						printf(ANSI_CYAN "  R%u" ANSI_RESET " = %s", local->reg, getstr(local->varname));
 						if (pc > local->startpc && pc <= local->endpc)
 							putchar('\n');
 						else
-							puts(" ; inactive");
+							puts(ANSI_GREY " ; inactive" ANSI_RESET);
 					}
 				}
 				else if (subcmd == "upvalues") {
 					if (!p->sizeupvalues) {
 						puts("missing upvalue info");
-						return;
+						continue;
 					}
 
 					for (int i = 0; i < p->sizeupvalues; i++)
-						printf("  U%d = %s\n", i, getstr(p->upvalues[i]));
+						printf(ANSI_CYAN "  U%d" ANSI_RESET " = %s\n", i, getstr(p->upvalues[i]));
 				}
 				else if (subcmd == "stack") {
 					const uint32_t end = p->maxstacksize;
@@ -410,7 +429,7 @@ namespace ldbg {
 						for (uint32_t j = 0; j < 4; j++) {
 							uint32_t idx = i + j * rows;
 							if (idx < end)
-								printf("R%-3d = %-15s", idx, lua_strprimitive(L->ci->base + idx).c_str());
+								printf(ANSI_CYAN "  R%-3d" ANSI_RESET " = %-15s", idx, lua_strprimitive(L->ci->base + idx).c_str());
 						}
 						putchar('\n');
 					}
@@ -418,39 +437,39 @@ namespace ldbg {
 				else if (subcmd == "breakpoints") {
 					if (breakpoints.empty()) {
 						puts("no breakpoints set");
-						return;
+						continue;
 					}
 
 					printf(
 						"%-4s %-8s %-30s %s\n"
-						"---- -------- ------------------------------ ----------\n",
+						ANSI_GREY "---- -------- ------------------------------ ----------\n" ANSI_RESET,
 						"n", "active", "location", "func");
 
 					size_t i = 0;
 					for (const auto& bp : breakpoints) {
 						const char* funcName = bp.p->debugname ? getstr(bp.p->debugname) : "??";
-						printf("%-4zu %-8s %-30s %s\n",
+						printf("%-4zu %-8s %-35s " ANSI_CYAN "%s\n" ANSI_RESET,
 							++i,
 							bp.enabled ? "yes" : "no",
-							(bp.source + ":" + std::to_string(bp.line)).c_str(), funcName
+							(bp.source + ":" ANSI_YELLOW + std::to_string(bp.line)).c_str(), funcName
 						);
 					}
 				}
 				else if (subcmd == "funcs") {
 					if (loadedProtos.empty()) {
 						puts("no functions loaded");
-						return;
+						continue;
 					}
 
 					printf(
 						"%-4s %-30s %-8s %s\n"
-						"---- ------------------------------ -------- --------------------\n",
+						ANSI_GREY "---- ------------------------------ -------- --------------------\n" ANSI_RESET,
 						"n", "func", "line", "source"
 					);
 
 					size_t i = 0;
 					for (const auto& p : loadedProtos) {
-						printf("%-4zu %-30s %-8d %s\n",
+						printf("%-4zu " ANSI_CYAN "%-30s" ANSI_YELLOW " %-9d" ANSI_RESET  "%s\n",
 							++i,
 							p->debugname ? getstr(p->debugname) : "??", p->linedefined,
 							getSource(p).c_str()
@@ -463,38 +482,36 @@ namespace ldbg {
 					putchar('\n');
 				}
 				else if (subcmd[0] == 'R') {
-					uint8_t idx = std::stoi(subcmd.substr(1));
-					if (idx > p->maxstacksize)
-						puts("index out of range");
-					else
-						puts(lua_strprimitive(L->ci->base + idx).c_str());
-				}
-				else if (subcmd[0] == 'K') {
-					int idx = std::stoi(subcmd.substr(1));
-					if (idx < 0 || idx > p->sizek)
-						puts("index out of range");
-					else
-						puts(lua_strprimitive(&p->k[idx]).c_str());
-				}
-				else if (subcmd[0] == 'U') {
-					uint8_t idx = std::stoi(subcmd.substr(1));
-					if (idx > p->nups)
-						puts("index out of range");
-					else
-						puts(lua_strprimitive(&cl->l.uprefs[idx]).c_str());
-				}
-				else if (subcmd == "mem") {
-					global_State* g = L->global;
-
-					printf("total memory usage: %zu bytes\n", g->totalbytes);
-					if (g->GCthreshold == SIZE_MAX)
-						puts("GC is unavailable");
-					else {
-						static const char* const gcStates[] = { "pause", "propagate", "propagateagain", "atomic", "sweep" };
-						printf("GC state: %s (threshold: %zu)\n", gcStates[g->gcstate], g->GCthreshold);
+					int idx = 0;
+					if (!parseInt(subcmd.substr(1), idx)) {
+						puts("index must be a number");
+						continue;
 					}
 
-				} else
+					if (idx < 0 || idx >= p->maxstacksize) puts("index out of range");
+					else puts(lua_strprimitive(L->base + idx).c_str());
+				}
+				else if (subcmd[0] == 'K') {
+					int idx = 0;
+					if (!parseInt(subcmd.substr(1), idx)) {
+						puts("index must be a number");
+						continue;
+					}
+
+					if (idx < 0 || idx >= p->sizek) puts("index out of range");
+					else puts(lua_strprimitive(&p->k[idx]).c_str());
+				}
+				else if (subcmd[0] == 'U') {
+					int idx = 0;
+					if (!parseInt(subcmd.substr(1), idx)) {
+						puts("index must be a number");
+						continue;
+					}
+
+					if (idx < 0 || idx >= p->nups) puts("index out of range");
+					else puts(lua_strprimitive(&cl->l.uprefs[idx]).c_str());
+				}
+				else
 					puts("unknown subcommand");
 
 			}
@@ -524,9 +541,9 @@ namespace ldbg {
 				const Instruction* end = p->code + p->sizecode;
 
 				while (pc < end) {
-					printf("  %04X  ", (uint32_t)(pc - p->code));
+					printf(ANSI_GREY "  %04X  ", (uint32_t)(pc - p->code));
 					ldbg::idisasm(stdout, pc, p);
-					putchar('\n');
+					fputs(ANSI_RESET "\n", stdout);
 					pc++;
 				}
 
@@ -629,7 +646,7 @@ namespace ldbg {
 					"  d, delete <num>       - delete breakpoint by number\n"
 					"  toggle <num>          - enable/disable breakpoint by number\n"
 					"  i, inspect [what]     - (no what) show function info\n"
-					"    locals              - list active local variables\n"
+					"    locals              - list all local variables\n"
 					"    upvalues            - list upvalues\n"
 					"    R<num>              - show value of register\n"
 					"    U<num>              - show value of upvalue\n"
@@ -643,6 +660,15 @@ namespace ldbg {
 					"  quit, q               - quit\n"
 					"  load <filename>       - load a nula library\n"
 					"  patch <op> <val>      - patch the current instruction\n"
+					"  gc [subcmd]           - (no subcmd) show GC & memory usage info\n"
+					"    step                - step the garbage collector\n"
+					"    full                - perform a full GC cycle\n"
+					"    threshold <val>     - set the GC threshold\n"
+					"    pause               - pause the GC completly\n"
+					"    resume              - resume the garbage collector\n"
+					"    stats               - show statistics\n"
+					"    trace               - toggle allocation, deallocation, and reallocation tracing\n"
+					"    dump                - dump the entire heap to ./gcdump.json\n"
 				);
 
 			}
@@ -690,7 +716,7 @@ namespace ldbg {
 						continue;
 					}
 					
-					*(int16_t*)(pc + 1) = (int16_t)val;
+					*(int16_t*)(pc + 2) = (int16_t)val;
 					break;
 
 				case 'e':
@@ -708,17 +734,316 @@ namespace ldbg {
 					puts("invalid operand");
 					continue;
 				}
+
+				ldbg::idisasm(stdout, (const Instruction*&)pc, clvalue(L->ci->func)->l.p);
+				putchar('\n');
+			}
+			else if (cmd == "gc") {
+				std::string subcmd;
+				ss >> std::ws;
+				ss >> subcmd;
+
+				global_State* g = L->global;
+
+				if (subcmd.empty()) {
+					struct Context {
+						global_State* g;
+						uint32_t dead, total;
+					};
+					Context ctx = { 0 };
+					ctx.g = g;
+
+					luaM_visitgco(L, &ctx, [](void* _ctx, lua_Page* page, GCObject* gco) -> bool {
+						if (!iscollectable(&gco->gch))
+							return false;
+						Context* ctx = (Context*)_ctx;
+						ctx->total++;
+						if (isdead(ctx->g, gco))
+							ctx->dead++;
+						return false;
+						});
+					if (g->GCthreshold == SIZE_MAX) {
+						printf("GC is unavailable\ntotal bytes allocated: " ANSI_YELLOW "%zu\n" ANSI_RESET, g->totalbytes);
+					}
+					else
+						printf("GC state: %s (threshold: " ANSI_YELLOW "%zu" ANSI_RESET " bytes)\ntotal bytes allocated: " ANSI_YELLOW "%zu\n" ANSI_RESET,
+							luaC_statename(g->gcstate), g->GCthreshold, g->totalbytes);
+
+					printf("total GC objects allocated: " ANSI_YELLOW "%u" ANSI_GREY "\n  %u of them are dead\n" ANSI_GREY, ctx.total, ctx.dead);
+					continue;
+				}
+				else if (subcmd == "step") {
+					if (!luaC_needsGC(L)) {
+						puts("can't step GC if totalbytes < GCthreshold; either change the threshold or run a full GC cycle");
+						continue;
+					}
+
+					std::string countStr;
+					ss >> std::ws;
+					ss >> countStr;
+
+					uint8_t count = 1;
+					if (!countStr.empty() && !parseInt(countStr, count)) {
+						puts("count must be an integer");
+						continue;
+					}
+					for (uint8_t i = 0; i < count; i++) {
+						luaC_step(L, true);
+						if (!luaC_needsGC(L))
+							break;
+					}
+				}
+				else if (subcmd == "full") {
+					if (g->GCthreshold != SIZE_MAX)
+						luaC_fullgc(L);
+				}
+				else if (subcmd == "threshold") {
+					std::string thresholdStr;
+					ss >> std::ws;
+					ss >> thresholdStr;
+
+					size_t threshold = 0;
+					if (!parseInt(thresholdStr, threshold)) {
+						puts("threshold must be an integer");
+						continue;
+					}
+					g->GCthreshold = threshold;
+					if (oldGCThreshold)
+						oldGCThreshold = 0;
+				}
+				else if (subcmd == "pause") {
+					if (oldGCThreshold)
+						puts("GC is already paused");
+					else {
+						oldGCThreshold = g->GCthreshold;
+						g->GCthreshold = SIZE_MAX;
+					}
+				}
+				else if (subcmd == "resume") {
+					if (!oldGCThreshold)
+						puts("GC is not paused");
+					else {
+						g->GCthreshold = oldGCThreshold;
+						oldGCThreshold = 0;
+					}
+				}
+				else if (subcmd == "stats") {
+					struct Context {
+						global_State* g;
+						uint32_t dead, total, white, gray, black, fixed;
+					};
+
+					Context ctx = { 0 };
+					ctx.g = g;
+
+					luaM_visitgco(L, &ctx, [](void* _ctx, lua_Page* page, GCObject* gco) -> bool {
+						if (!iscollectable(&gco->gch))
+							return false;
+
+						Context* ctx = (Context*)_ctx;
+						ctx->total++;
+
+						if (isdead(ctx->g, gco))
+							ctx->dead++;
+						if (iswhite(gco))
+							ctx->white++;
+						else if (isblack(gco))
+							ctx->black++;
+						else if (isgray(gco))
+							ctx->gray++;
+						if (isfixed(gco))
+							ctx->fixed++;
+						return false;
+					});
+	
+					printf(
+						"total GC objects: " ANSI_YELLOW "%u\n" ANSI_GREY
+						"  %u of them are dead\n"
+						"  %u of them are white\n"
+						"  %u of them are gray\n"
+						"  %u of them are black\n"
+						"  %u of them are fixed\n" ANSI_RESET,
+						ctx.total, ctx.dead, ctx.white, ctx.gray, ctx.black, ctx.fixed
+					);
+					
+					printf("heap goal size: " ANSI_YELLOW "%zu" ANSI_RESET " bytes\n", g->gcstats.heapgoalsizebytes);
+					printf("atomic start total size: " ANSI_YELLOW "%zu" ANSI_RESET " bytes\n" ANSI_RESET, g->gcstats.atomicstarttotalsizebytes);
+					printf("end total size: " ANSI_YELLOW "%zu" ANSI_RESET " bytes\n" ANSI_RESET, g->gcstats.endtotalsizebytes);
+					printf("trigger integral: " ANSI_YELLOW "%d\n" ANSI_RESET, g->gcstats.triggerintegral);
+					printf("trigger term position: " ANSI_YELLOW "%u\n" ANSI_RESET, g->gcstats.triggertermpos);
+
+					if (g->gcstats.starttimestamp > 0) {
+						printf("start timestamp: " ANSI_YELLOW "%.6f\n" ANSI_RESET, g->gcstats.starttimestamp);
+						printf("end timestamp: " ANSI_YELLOW "%.6f\n" ANSI_RESET, g->gcstats.endtimestamp);
+						printf("atomic start timestamp: " ANSI_YELLOW "%.6f\n" ANSI_RESET, g->gcstats.atomicstarttimestamp);
+
+						if (g->gcstats.endtimestamp > g->gcstats.starttimestamp)
+							printf("total GC cycle time: " ANSI_YELLOW "%.6f seconds\n" ANSI_RESET, g->gcstats.endtimestamp - g->gcstats.starttimestamp);
+
+						if (g->gcstats.atomicstarttimestamp > g->gcstats.starttimestamp)
+							printf("mark phase time: " ANSI_YELLOW "%.6f seconds\n" ANSI_RESET, g->gcstats.atomicstarttimestamp - g->gcstats.starttimestamp);
+					}
+				}
+				else if (subcmd == "list") {
+					std::string arg;
+
+					uint8_t filterType = 255;
+					uint8_t filterMarked = 255;
+					uint8_t filterMemcat = 255;
+
+					while (ss >> arg) {
+						size_t eq = arg.find('=');
+						if (eq != std::string::npos) {
+							const std::string& key = arg.substr(0, eq);
+							const std::string& value = arg.substr(eq + 1);
+							if (key == "type") {
+								int tt = LUA_TNONE;
+								for (int i = 0; i < LUA_T_COUNT; i++) {
+									if (value == luaT_typenames[i]) {
+										tt = i;
+										break;
+									}
+								}
+
+								if (tt == LUA_TNONE) {
+									puts("unknown type");
+									goto badOption;
+								}
+
+								if (tt < LUA_TSTRING) {
+									puts("type is not garbage collectable");
+									goto badOption;
+								}
+
+								filterType = tt;
+
+							}
+							else if (key == "mark") {
+								if (value == "white") filterMarked = 0;
+								else if (value == "gray") filterMarked = 1;
+								else if (value == "black") filterMarked = 2;
+								else if (value == "fixed") filterMarked = 3;
+								else {
+									puts("invalid marked");
+									goto badOption;
+								}
+							}
+							else if (key == "memcat") {
+								if (!parseInt(value, filterMemcat)) {
+									puts("memcat must be an integer");
+									goto badOption;
+								}
+
+								if (filterMemcat > LUA_MEMORY_CATEGORIES) {
+									puts("memcat out of range");
+									goto badOption;
+								}
+							}
+							else {
+								puts("unknown option");
+								goto badOption;
+							}
+						}
+					}
+
+					// TODO: fuckass
+					goto allGood;
+				badOption:
+					continue;
+				allGood:;
+
+					struct Context {
+						global_State* g;
+						uint8_t filterType;
+						uint8_t filterMarked;
+						uint8_t filterMemcat;
+						uint32_t count;
+					};
+					Context ctx = { g, filterType, filterMarked, filterMemcat, 0 };
+
+					luaM_visitgco(L, &ctx, [](void* _ctx, lua_Page* page, GCObject* gco) -> bool {
+						if (!iscollectable(&gco->gch))
+							return false;
+						Context* ctx = (Context*)_ctx;
+
+						if (ctx->filterType != 255 && gco->gch.tt != ctx->filterType)
+							return false;
+
+						if (ctx->filterMemcat != 255 && gco->gch.memcat != ctx->filterMemcat)
+							return false;
+
+						switch (ctx->filterMarked) {
+						case 0:
+							if (!iswhite(gco))
+								return false;
+							break;
+						case 1:
+							if (!isgray(gco))
+								return false;
+							break;
+						case 2:
+							if (!isblack(gco))
+								return false;
+							break;
+						case 3:
+							if (!isfixed(gco))
+								return false;
+							break;
+						default:
+							break;
+						}
+						
+						TValue o;
+						o.value.p = gco;
+						o.tt = gco->gch.tt;
+						const std::string& s = lua_strprimitive(&o);
+
+						printf("  %.*s (address = " ANSI_YELLOW "0x%llx" ANSI_RESET ", type=%s, marked=%s%s, memcat=" ANSI_YELLOW "%u" ANSI_RESET ")\n",
+							(uint32_t)s.length(), s.c_str(),
+							(uintptr_t)gco,
+							luaT_typenames[gco->gch.tt],
+							isfixed(gco) ? "fixed " : "", iswhite(gco) ? "white" : isblack(gco) ? "black" : isgray(gco) ? "gray" : "unknown",
+							gco->gch.memcat
+						);
+						ctx->count++;
+						return false;
+					});
+					printf("\ntotal objects: " ANSI_YELLOW "%u\n" ANSI_RESET, ctx.count);
+				}
+				else if (subcmd == "trace") {
+					if (oldFrealloc) {
+						g->frealloc = oldFrealloc;
+						oldFrealloc = nullptr;
+						printf("allocation tracing disabled\n");
+					}
+					else {
+						oldFrealloc = g->frealloc;
+						g->frealloc = frealloc;
+						printf("allocation tracing enabled\n");
+					}
+				}
+				else if (subcmd == "dump") {
+					FILE* file = nullptr;
+					if (!fopen_s(&file, "gcdump.json", "w") || !file) {
+						puts("unable to open gcdump.json");
+						continue;
+					}
+
+					luaC_dump(L, file, nullptr);
+					fclose(file);
+					puts("heap dump written to gcdump.json");
+				}
+				else puts("unknown subcommand");
 			}
 			else {
 				const std::string& btc = Luau::compile(line, { 2, 2, 1 }, {}, nullptr);
 
-				if (luau_load(L, "ldbg", btc.data(), btc.size(), 0))
-					puts(lua_tostring(L, -1));
-				else {
-					lua_pushcfunction(L, _handler, "");
-					lua_pcall(L, 0, 0, -2);
-				}
+				L->singlestep = false;
+				lua_pushcfunction(L, ldbg::_handler, "");
+				if (luau_load(L, "ldbg", btc.data(), btc.size(), 0)) puts(lua_tostring(L, -1));
+				else lua_pcall(L, 0, 0, -2);
 				lua_pop(L, 1);
+				L->singlestep = true;
 			}
 		}
 	}
@@ -763,19 +1088,15 @@ namespace ldbg {
 					uint8_t ra = LUAU_INSN_A(*pc);
 					uint8_t rb = LUAU_INSN_B(*pc);
 		
-					if (rb == 0) {
-						int count = (int)(L->top - (cip->base + ra));
-						printf("returned %d value(s):\n", count);
-			
-						for (int i = 0; i < count; i++)
-							printf("  %d = %s\n", i + 1, lua_strprimitive(cip->base + ra + i).c_str());
-					} else {
-						int count = rb - 1;
-						printf("returned %d value(s)\n", count);
-			
-						for (int i = 0; i < count; i++)
-							printf("  %d = %s\n", i + 1, lua_strprimitive(cip->base + ra + i).c_str());
-					}
+					int count = 0;
+					if (rb == 0)
+						count = (int)(L->top - (cip->base + ra));
+					else
+						count = rb - 1;
+
+					printf("returned " ANSI_YELLOW "%d" ANSI_RESET " value(s):\n", count);
+					for (int i = 0; i < count; i++)
+						printf(ANSI_GREY "  %d " ANSI_RESET "= %s\n", i + 1, lua_strprimitive(cip->base + ra + i).c_str());
 				}
 			} else
 				return;
@@ -796,7 +1117,7 @@ namespace ldbg {
 		if (cl->isC)
 			return;
 
-		printf("breakpoint hit in function '%s' at %s:%d\n",
+		printf("breakpoint hit in function '%s' at %s:" ANSI_YELLOW "%d\n" ANSI_RESET,
 			cl->l.p->debugname ? getstr(cl->l.p->debugname) : "??",
 			getSource(cl->l.p).c_str(), ar->currentline
 		);
@@ -808,8 +1129,8 @@ namespace ldbg {
 			putchar('\n');
 
 			repl(L);
-		}
-		debugstepActive = true;
+		} else
+			debugstepActive = true;
 	}
 }
 
@@ -852,7 +1173,8 @@ int __bp(lua_State* L) {
 	if (status == LUA_YIELD && L->status != LUA_YIELD) {
 		L->status = LUA_YIELD;
 		L->base = restorestack(L, base);
-	} else if (status == LUA_BREAK) {
+	}
+	else if (status == LUA_BREAK) {
 		LUAU_ASSERT(L->status != LUA_BREAK);
 
 		L->status = LUA_BREAK;
@@ -865,15 +1187,19 @@ int __bp(lua_State* L) {
 
 int main(int argc, char** argv) {
 	std::string filename;
-	bool enableDebugBreak = true;
+	struct {
+		// add __debugbreak() to env
+		bool enableDebugBreak : 1 = true;
+	} flags;
 
 	int i = 1;
 	while (i < argc) {
 		std::string arg = argv[i];
 		if (arg == "-fno-debugbreak") {
-			enableDebugBreak = false;
+			flags.enableDebugBreak = false;
 			++i;
-		} else {
+		}
+		else {
 			filename = argv[i];
 			++i;
 
@@ -886,7 +1212,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (filename.empty()) {
-		printf("usage: ldbg [-fno-debugbreak] <filename>\n");
+		printf("usage: ldbg [...flags] <filename>\n");
 		return 1;
 	}
 
@@ -895,8 +1221,8 @@ int main(int argc, char** argv) {
 		luaL_openlibs(L);
 		luaL_sandboxthread(L);
 
-		if (enableDebugBreak) {
-			lua_pushcfunction(L, __bp, "__debugbreak");
+		if (flags.enableDebugBreak) {
+			lua_pushcfunction(L, __bp, "");
 			lua_setglobal(L, "__debugbreak");
 		}
 
@@ -927,10 +1253,12 @@ int main(int argc, char** argv) {
 				1, // verbose coverage is stupid
 			}, {}, nullptr);
 
+		lua_pushcfunction(L, ldbg::_handler, "");
 		if (!luau_load(L, std::format("@{}", filename).c_str(), src.data(), src.size(), 0)) {
 			const Closure* cl = clvalue(L->top - 1);
 			ldbg::collectProtos(cl->l.p);
-			lua_call(L, 0, 0);
+
+			lua_pcall(L, 0, 0, -2);
 		} else {
 			puts(lua_tostring(L, -1));
 			return 1;
