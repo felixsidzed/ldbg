@@ -1,14 +1,6 @@
-local function fibonacciNumber(n)
-	if n <= 1 then
-		return n
-	end
-	return fibonacciNumber(n - 1)
-		+ fibonacciNumber(n - 2)
+local u = 0
+u += 5
+local function x()
+	return u
 end
-
-local n = 7
-local sum = 0
-for i = 0, n do
-	sum = sum + fibonacciNumber(i)
-end
-print("fibonacci sum:", sum)
+print(x())

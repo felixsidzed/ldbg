@@ -189,7 +189,7 @@ namespace ldbg {
 			fprintf(f, "R%u R%u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) + 1);
 			break;
 		case LOP_CALL:
-			fprintf(f, "R%u %u %u", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1, LUAU_INSN_C(insn) - 1);
+			fprintf(f, "R%u %d %d", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1, LUAU_INSN_C(insn) - 1);
 			break;
 		case LOP_RETURN:
 		case LOP_GETVARARGS:
