@@ -275,7 +275,7 @@ namespace ldbg {
 			break;
 		}
 
-		fputs(ANSI_RESET, f);
+		fputs(ANSI_RESET "", f);
 	}
 
 	void fdisasm(FILE* f, const Proto* p) {
