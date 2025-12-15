@@ -1,2 +1,2 @@
 # ldbg
-A standalone GDB-like debugger for Luau
+An embeddable GDB-like debugger for Luau
