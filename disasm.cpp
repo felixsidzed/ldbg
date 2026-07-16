@@ -13,6 +13,8 @@
 
 #include "style.h"
 
+//#define LDBG_ROBLOX
+
 namespace ldbg {
 	static const char* luau_opcode[LOP__COUNT] = {
 		"NOP", "BREAK",
@@ -37,9 +39,10 @@ namespace ldbg {
 		"FASTCALL1", "FASTCALL2", "FASTCALL2K",
 		"FORGPREP", "JUMPXEQKNIL", "JUMPXEQKB", "JUMPXEQKN", "JUMPXEQKS",
 		"IDIV", "IDIVK",
+		"GETUDATAKS", "SETUDATAKS", "NAMECALLUDATA", "NEWCLASSMEMBER", "CALLFB", "CMPPROTO"
 	};
 
-	std::string lua_strprimitive(const TValue* o) {
+	std::string strprimitive(const TValue* o) {
 		switch (ttype(o)) {
 		case LUA_TNIL:
 			return "nil";
@@ -61,6 +64,16 @@ namespace ldbg {
 					if (cl->l.p && cl->l.p->debugname)
 						return std::string(getstr(cl->l.p->debugname), cl->l.p->debugname->len);
 				}
+			}
+			[[fallthrough]];
+		case LUA_TCLASS:
+			if (LuauClass* cl = classvalue(o))
+				return '"' + std::string(cl->name->data, cl->name->len) + '"';	
+			[[fallthrough]];
+		case LUA_TOBJECT:
+			if (LuauObject* obj = objectvalue(o)) {
+				LuauClass* cl = obj->lclass;
+				return "object<" + std::string(cl->name->data, cl->name->len) + '>';
 			}
 			[[fallthrough]];
 		default:
@@ -121,7 +134,7 @@ namespace ldbg {
 		case LOP_DUPCLOSURE:
 		case LOP_LOADKX: {
 			uint32_t D = LUAU_INSN_D(insn);
-			fprintf(f, ANSI_CYAN "R%u K%u " ANSI_GREY "; %s", LUAU_INSN_A(insn), D, lua_strprimitive(&p->k[D]).c_str());
+			fprintf(f, ANSI_CYAN "R%u K%u " ANSI_GREY "; %s", LUAU_INSN_A(insn), D, strprimitive(&p->k[D]).c_str());
 		} break;
 		case LOP_SETGLOBAL:
 		case LOP_GETGLOBAL:
@@ -180,11 +193,14 @@ namespace ldbg {
 		case LOP_DIVRK:
 			fprintf(f, ANSI_CYAN "R%u R%u R%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
 			break;
+		case LOP_GETUDATAKS:
+		case LOP_SETUDATAKS:
+		case LOP_NAMECALLUDATA:
 		case LOP_GETTABLEKS:
 		case LOP_SETTABLEKS:
 		case LOP_NAMECALL: {
 			uint32_t aux = *++pc;
-			fprintf(f, ANSI_CYAN "R%u R%u K%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, lua_strprimitive(&p->k[aux]).c_str());
+			fprintf(f, ANSI_CYAN "R%u R%u K%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, strprimitive(&p->k[aux]).c_str());
 		} break;
 		case LOP_GETTABLEN:
 		case LOP_SETTABLEN:
@@ -235,7 +251,7 @@ namespace ldbg {
 			break;
 		case LOP_FASTCALL2K: {
 			uint32_t aux = *++pc;
-			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u K%u L%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, line + (((insn) >> 24) & 0xff), lua_strprimitive(&p->k[aux]).c_str());
+			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u K%u L%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), LUAU_INSN_B(insn), aux, line + (((insn) >> 24) & 0xff), strprimitive(&p->k[aux]).c_str());
 		} break;
 		case LOP_FASTCALL3:
 			fprintf(f, ANSI_YELLOW "%u " ANSI_CYAN "R%u R%u R%u L%u", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *++pc & 0xFF, (*pc >> 8) & 0xFF, line + LUAU_INSN_C(insn));
@@ -269,8 +285,19 @@ namespace ldbg {
 		case LOP_JUMPXEQKN:
 		case LOP_JUMPXEQKS: {
 			uint32_t aux = *++pc & 0xFFFFFF;
-			fprintf(f, ANSI_CYAN "R%u K%u L%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), aux, line + LUAU_INSN_D(insn) - 1, lua_strprimitive(&p->k[aux]).c_str());
+			fprintf(f, ANSI_CYAN "R%u K%u L%u " ANSI_GREY "; " "%s", LUAU_INSN_A(insn), aux, line + LUAU_INSN_D(insn) - 1, strprimitive(&p->k[aux]).c_str());
 		} break;
+		case LOP_NEWCLASSMEMBER: {
+			uint32_t aux = *++pc;
+			fprintf(f, ANSI_CYAN "R%d K%d R%d " ANSI_GREY "; %s", LUAU_INSN_A(insn), aux, LUAU_INSN_C(insn), strprimitive(&p->k[aux]).c_str());
+			break;
+		}
+		case LOP_CALLFB:
+			fprintf(f, ANSI_CYAN "R%u " ANSI_YELLOW "%d %d 0x%x", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1, LUAU_INSN_C(insn) - 1, *++pc);
+			break;
+		case LOP_CMPPROTO:
+			fprintf(f, ANSI_CYAN "R%u " ANSI_YELLOW "%d %d", LUAU_INSN_A(insn), *++pc, LUAU_INSN_D(insn));
+			break;
 		default:
 			break;
 		}

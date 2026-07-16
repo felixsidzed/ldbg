@@ -10,7 +10,16 @@
 
 #include "ldbg.h"
 
+namespace FFlag {
+	extern Luau::FValue<bool> DebugLuauUserDefinedClasses;
+	extern Luau::FValue<bool> DebugLuauUserDefinedClassesRuntime;
+}
+
 int main(int argc, char** argv) {
+	// ???
+	FFlag::DebugLuauUserDefinedClasses.value = true;
+	FFlag::DebugLuauUserDefinedClassesRuntime.value = true;
+
 	if (argc < 2) {
 		printf("%s <file>", argv[0]);
 		return 1;
@@ -45,7 +54,7 @@ int main(int argc, char** argv) {
 				1, // O2 can harm debuggability
 				2, // all debug info
 				1,
-				1, // verbose coverage is stupid
+				0, // verbose coverage is stupid
 			}, {}, nullptr);
 
 		ldbg::Debugger dbg;

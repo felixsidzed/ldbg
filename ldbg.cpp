@@ -29,6 +29,7 @@ namespace nula {
 
 namespace ldbg {
 
+	// not using L->userdata for better embeddability
 	static std::unordered_map<lua_State*, Debugger*> debuggers;
 
 	static void debugstep(lua_State* L, lua_Debug* ar) {
@@ -48,7 +49,7 @@ namespace ldbg {
 	}
 
 	static int onError(lua_State* L) {
-		const Debugger::Options& options = ((Debugger*)L->global->ud)->options;
+		const Debugger::Options& options = debuggers[L]->options;
 
 		fprintf(options.out, ANSI_RED "%s" ANSI_GREY "\nStack Begin\n", luaL_checkstring(L, 1));
 		lua_getglobal(L, "debug");
@@ -61,7 +62,7 @@ namespace ldbg {
 		return 0;
 	}
 
-	extern std::string lua_strprimitive(const TValue* o);
+	extern std::string strprimitive(const TValue* o);
 
 	template<typename T>
 	static bool parseInt(const std::string& s, T& idx) {
@@ -419,8 +420,7 @@ namespace ldbg {
 			}
 			else if (cmd == "inspect" || cmd == "i") {
 				std::string subcmd;
-				ss >> std::ws;
-				std::getline(ss, subcmd);
+				ss >> subcmd;
 
 				if (subcmd.empty()) {
 					dumpFunctionInfo(L);
@@ -464,7 +464,7 @@ namespace ldbg {
 						for (uint32_t j = 0; j < 4; j++) {
 							uint32_t idx = i + j * rows;
 							if (idx < end)
-								fprintf(options.out, ANSI_CYAN "  R%-3d" ANSI_RESET " = %-15s", idx, lua_strprimitive(L->ci->base + idx).c_str());
+								fprintf(options.out, ANSI_CYAN "  R%-3d" ANSI_RESET " = %-15s", idx, strprimitive(L->ci->base + idx).c_str());
 						}
 						putchar('\n');
 					}
@@ -516,6 +516,36 @@ namespace ldbg {
 					ldbg::idisasm(options.out, pc, p);
 					putchar('\n');
 				}
+				else if (subcmd == "object") {
+					int idx = 0;
+					std::string strindex;
+					ss >> strindex;
+					if (!parseInt(strindex, idx)) {
+						puts("index must be a number");
+						continue;
+					}
+
+					if (idx < 0 || idx >= p->maxstacksize) {
+						puts("index out of range");
+						continue;
+					}
+
+					TValue* o = L->base + idx;
+					if (o->tt != LUA_TOBJECT) {
+						puts("register does not contain an object");
+						continue;
+					}
+
+					// TODO: list static members & use public api when added
+					LuauObject* obj = (LuauObject*)objectvalue(o);
+					LuauClass* cls = obj->lclass;
+					for (int i = 0; i < obj->numberofmembers; i++) {
+						TValue* member = &obj->members[i];
+
+						printf("  " ANSI_GREY "%04X:" ANSI_RESET" .%s = " ANSI_YELLOW "%s\n", i, cls->offsettomember[i]->data, strprimitive(member).c_str());
+					}
+					puts(ANSI_RESET);
+				}
 				else if (subcmd[0] == 'R') {
 					int idx = 0;
 					if (!parseInt(subcmd.substr(1), idx)) {
@@ -524,7 +554,7 @@ namespace ldbg {
 					}
 
 					if (idx < 0 || idx >= p->maxstacksize) puts("index out of range");
-					else puts(lua_strprimitive(L->base + idx).c_str());
+					else puts(strprimitive(L->base + idx).c_str());
 				}
 				else if (subcmd[0] == 'K') {
 					int idx = 0;
@@ -534,7 +564,7 @@ namespace ldbg {
 					}
 
 					if (idx < 0 || idx >= p->sizek) puts("index out of range");
-					else puts(lua_strprimitive(&p->k[idx]).c_str());
+					else puts(strprimitive(&p->k[idx]).c_str());
 				}
 				else if (subcmd[0] == 'U') {
 					int idx = 0;
@@ -544,11 +574,10 @@ namespace ldbg {
 					}
 
 					if (idx < 0 || idx >= p->nups) puts("index out of range");
-					else puts(lua_strprimitive(&cl->l.uprefs[idx]).c_str());
+					else puts(strprimitive(&cl->l.uprefs[idx]).c_str());
 				}
 				else
 					puts("unknown subcommand");
-
 			}
 			else if (cmd == "disasm") {
 				std::string func;
@@ -668,43 +697,6 @@ namespace ldbg {
 					lua_pop(L, 1);
 					lua_unref(L, refDllMain);
 				}
-
-			}
-			else if (cmd == "help") {
-				fprintf(options.out, 
-					"  c, continue           - continue execution\n"
-					"  s, step               - step into next instruction\n"
-					"  n, next               - step over function calls\n"
-					"  finish                - step out of current function\n"
-					"  bt, backtrace         - dump call stack\n"
-					"  b, break <loc>        - set breakpoint at location\n"
-					"  d, delete <num>       - delete breakpoint by number\n"
-					"  toggle <num>          - enable/disable breakpoint by number\n"
-					"  i, inspect [what]     - (no what) show function info\n"
-					"    locals              - list all local variables\n"
-					"    upvalues            - list upvalues\n"
-					"    R<num>              - show value of register\n"
-					"    U<num>              - show value of upvalue\n"
-					"    K<num>              - show value of constant\n"
-					"    stack               - dump stack\n"
-					"    breakpoints         - list all breakpoints\n"
-					"    funcs               - list loaded functions\n"
-					"    insn				 - disassemble current instruction\n"
-					"  disasm [func]         - disassemble the provided or the current function\n"
-					"  cls                   - clear console\n"
-					"  quit, q               - quit\n"
-					"  load <filename>       - load a nula library\n"
-					"  patch <op> <val>      - patch the current instruction\n"
-					"  gc [subcmd]           - (no subcmd) show GC & memory usage info\n"
-					"    step                - step the garbage collector\n"
-					"    full                - perform a full GC cycle\n"
-					"    threshold <val>     - set the GC threshold\n"
-					"    pause               - pause the GC completly\n"
-					"    resume              - resume the garbage collector\n"
-					"    stats               - show statistics\n"
-					"    trace               - toggle allocation, deallocation, and reallocation tracing\n"
-					"    dump                - dump the entire heap to ./gcdump.json\n"
-				);
 
 			}
 			else if (cmd == "patch") {
@@ -1033,7 +1025,7 @@ namespace ldbg {
 						TValue o;
 						o.value.p = gco;
 						o.tt = gco->gch.tt;
-						const std::string& s = lua_strprimitive(&o);
+						const std::string& s = strprimitive(&o);
 
 						fprintf(ctx->out, "  %.*s (address = " ANSI_YELLOW "0x%llx" ANSI_RESET ", type=%s, marked=%s%s, memcat=" ANSI_YELLOW "%u" ANSI_RESET ")\n",
 							(uint32_t)s.length(), s.c_str(),
@@ -1048,6 +1040,8 @@ namespace ldbg {
 					fprintf(options.out, "\ntotal objects: " ANSI_YELLOW "%u\n" ANSI_RESET, ctx.count);
 				}
 				else if (subcmd == "trace") {
+					// freealloc unfortunately doesnt pass thread, so we have to override ud here
+					// TODO: use a map like we did with debuggers
 					if (oldFrealloc) {
 						g->ud = nullptr;
 						g->frealloc = oldFrealloc;
@@ -1135,7 +1129,7 @@ namespace ldbg {
 
 					printf("returned " ANSI_YELLOW "%d" ANSI_RESET " value(s):\n", count);
 					for (int i = 0; i < count; i++)
-						printf(ANSI_GREY "  %d " ANSI_RESET "= %s\n", i + 1, lua_strprimitive(cip->base + ra + i).c_str());
+						printf(ANSI_GREY "  %d " ANSI_RESET "= %s\n", i + 1, strprimitive(cip->base + ra + i).c_str());
 				}
 			} else
 				return;
